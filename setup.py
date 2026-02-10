@@ -63,7 +63,10 @@ def install_espeak_ng():
     if platform.system().lower() == "windows":
         install_espeak_ng_windows_portable()
     else:
-        run("sudo apt install -y espeak-ng")
+        try:
+            run("sudo apt install -y espeak-ng")
+        except:
+            run("apt install -y espeak-ng")
 
 
 class CustomInstall(install):

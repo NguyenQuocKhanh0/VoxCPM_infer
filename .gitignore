@@ -1,0 +1,10 @@
+# Third-party libraries
+third_party/
+
+# Gradio cache / config
+.gradio/
+
+# Python cache
+__pycache__/
+voxcpm_env.egg-info/
+checkpoints/

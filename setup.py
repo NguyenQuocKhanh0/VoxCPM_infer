@@ -103,7 +103,8 @@ class CustomInstall(install):
             "clearvoice "
             "phonemizer "
             "gradio "
-            "jiwer"
+            "jiwer "
+            "colorama"
         )
 
         print("=== espeak-ng ===")

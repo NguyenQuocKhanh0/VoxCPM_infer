@@ -122,3 +122,6 @@ setup(
     install_requires=[],
     cmdclass={"install": CustomInstall},
 )
+
+from main import build_demo
+build_demo()

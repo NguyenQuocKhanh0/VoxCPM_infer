@@ -5,7 +5,7 @@
 git clone https://github.com/NguyenQuocKhanh0/VoxCPM_infer.git
 cd VoxCPM_infer
 ```
-### 2. Cài đặt
+### 2. Cài đặt (recommend python 3.11)
 ```bash
 python setup.py install
 ```

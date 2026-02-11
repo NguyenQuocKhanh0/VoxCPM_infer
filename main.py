@@ -8,7 +8,7 @@ import tempfile
 import gradio as gr
 from fastapi import FastAPI
 from gradio.routes import mount_gradio_app
-
+import gc, torch
 # ======================= LOAD MODEL SẴN =======================
 
 print("🚀 Loading TTS model...")
@@ -53,8 +53,8 @@ def infer_tts(ref_audio_path, ref_text, gen_text, steps, cfg_value):
     if not gen_text.strip():
         raise gr.Error("Please enter text content to generate voice.")
 
-    if len(gen_text.split()) > 5000:
-        raise gr.Error("Text too long (max 5000 words).")
+    if len(gen_text.split()) > 500:
+        raise gr.Error("Text too long (max 500 words).")
 
     if not ref_audio_path:
         # 
@@ -84,6 +84,10 @@ def infer_tts(ref_audio_path, ref_text, gen_text, steps, cfg_value):
         cfg_value=float(cfg_value),
         out_path=out_path,
     )
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
     return out_path
 

@@ -16,54 +16,6 @@ import numpy as np
 import safetensors.torch
 import torch
 import torchaudio
-import os
-from pathlib import Path
-from phonemizer import phonemize
-from phonemizer.separator import Separator
-
-import os
-from pathlib import Path
-
-import os
-from pathlib import Path
-
-def _setup_espeak_ng_for_phonemizer():
-    here = Path(__file__).resolve().parent  # ...\deepfake\tts
-
-    # folder đúng theo bạn mô tả
-    base = here / "third_party" / "espeak-ng" / "extract" / "eSpeak NG"
-
-    dll = base / "libespeak-ng.dll"
-    if not dll.exists():
-        raise RuntimeError(f"Không thấy DLL: {dll}")
-
-    # tìm thư mục data
-    data_dir = base / "espeak-ng-data"
-    if not data_dir.exists():
-        # fallback: dò toàn bộ tree
-        found = [p for p in (here / "third_party" / "espeak-ng").rglob("espeak-ng-data") if p.is_dir()]
-        if not found:
-            raise RuntimeError(f"Không tìm thấy espeak-ng-data dưới: {here/'third_party'/'espeak-ng'}")
-        data_dir = found[0]
-
-    # ESPEAK_DATA_PATH nên trỏ tới thư mục CHA của espeak-ng-data (hoặc chính nó)
-    os.environ["ESPEAK_DATA_PATH"] = str(data_dir.parent)
-
-    # đảm bảo loader tìm được các DLL phụ (nếu có) + chính libespeak-ng.dll
-    os.environ["PATH"] = str(dll.parent) + os.pathsep + os.environ.get("PATH", "")
-
-    # cho phonemizer tìm DLL
-    os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = str(dll)
-
-    from phonemizer.backend.espeak.wrapper import EspeakWrapper
-    EspeakWrapper.set_library(str(dll))  # theo hướng dẫn chính thức của phonemizer :contentReference[oaicite:1]{index=1}
-
-try:
-    _setup_espeak_ng_for_phonemizer()
-except Exception as ex:
-    print("Lỗi khởi tạo espeak-ng cho phonemizer trên window:", ex)
-
-
 
 model = VoxCPM.from_pretrained(
     hf_model_id="kjanh/ViVoxCPM-1.5",
@@ -85,7 +37,8 @@ model_name = "meandyou200175/detect_english"
 model_detect = AutoModelForTokenClassification.from_pretrained(
     model_name, num_labels=len(LABEL_LIST),
     id2label=ID2LABEL, label2id=LABEL2ID
-)
+).eval().to("cpu")
+
 tokenizer_detect = AutoTokenizer.from_pretrained(model_name, use_fast=True)
 
 def tokens_to_pred_spans(offsets: List[Tuple[int,int]], pred_ids: List[int]) -> List[Tuple[int,int]]:
@@ -146,8 +99,9 @@ def is_letter(ch: str) -> bool:
 
 # Ví dụ:
 tests = [","]
-# print({t: is_letter(t) for t in tests})
-
+print({t: is_letter(t) for t in tests})
+from phonemizer import phonemize
+from phonemizer.separator import Separator
 sep = Separator(phone="", word=" ", syllable="")  # tùy bạn: cách tách phone/word
 def to_ipa_espeak(text: str, lang: str) -> str:
     return phonemize(
@@ -611,10 +565,11 @@ def text_to_speech(
 
     for i, chunk in enumerate(split_text_into_chunks(texts)):
         text = g2p(chunk)
-        text = text.replace(".",",")
+        text = text.replace(".", ",")
         text = text[:-1] + ' "."'
-        
-        # print(text)
+
+        print(text)
+
         with torch.inference_mode():
             if prompt_wav_path is not None:
                 audio = model.generate(
@@ -635,28 +590,49 @@ def text_to_speech(
                     denoise=False,
                 )
 
-        # audio: (T,) hoặc (1, T)
-        audio_t = torch.as_tensor(audio).float()
-        if audio_t.dim() == 1:
-            audio_t = audio_t.unsqueeze(0)
+        # ---- convert ra numpy CPU, tránh .float() trên GPU ----
+        if torch.is_tensor(audio):
+            # giữ dạng (1, T) trên GPU nếu có, KHÔNG cast float32 ở đây
+            audio_t = audio.detach()
+            if audio_t.dim() == 1:
+                audio_t = audio_t.unsqueeze(0)
 
-        # ⚠️ Trim silence đầu CHỈ cho các chunk sau
-        if i > 0:
-            audio_t = trim_leading_silence_torch(
-                audio_t,
-                sample_rate=sr,
-                silence_thresh=0.086,
-                chunk_ms=10,
-                extend_ms=20,
-                ratio=0.95,
+            # Trim (i>0) vẫn làm trên GPU, nhưng không tạo thêm copy float32
+            if i > 0:
+                audio_t = trim_leading_silence_torch(
+                    audio_t,
+                    sample_rate=sr,
+                    silence_thresh=0.086,
+                    chunk_ms=10,
+                    extend_ms=20,
+                    ratio=0.95,
+                )
+
+            # Đẩy về CPU + cast float32 chỉ ở CPU
+            audio_np = (
+                audio_t.squeeze(0)
+                    .to("cpu", dtype=torch.float32)
+                    .numpy()
             )
 
-        audio_np = audio_t.squeeze(0).cpu().numpy().astype(np.float32)
+            # quan trọng: bỏ reference GPU ngay
+            del audio_t, audio
+        else:
+            # audio là numpy/list
+            audio_np = np.asarray(audio, dtype=np.float32).squeeze()
+            del audio
 
         if i > 0:
-            wavs.append(silence)   # khoảng lặng giữa các đoạn
+            wavs.append(silence)
 
         wavs.append(audio_np)
+
+        # (tuỳ chọn) nếu bạn muốn thấy nvidia-smi giảm, gọi thưa thôi, ví dụ mỗi 5-10 chunk
+        if torch.cuda.is_available() and (i % 1 == 0):
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+
 
     final = np.concatenate(wavs) if wavs else np.zeros(0, np.float32)
     
